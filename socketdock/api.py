@@ -4,6 +4,8 @@ from contextvars import ContextVar
 import logging
 import time
 
+import asyncio
+
 from sanic import Blueprint, Request, Websocket, json, text
 
 from .backend import Backend
@@ -18,6 +20,9 @@ LOGGER = logging.getLogger(__name__)
 LAUNCH_TIME = time.time_ns()
 # TODO: track timestamp of connections when connected
 active_connections = {}
+
+post_connections = {}
+
 lifetime_connections = 0
 
 
@@ -37,6 +42,35 @@ async def status_handler(request: Request):
             },
         }
     )
+
+@api.post("/post/<connectionid>/send")
+async def post_send(request: Request, connectionid: str):
+    await post_connections['abc'].put('bob')
+
+    return text("OK")
+
+@api.post("/post/<path:path>")
+async def post(request: Request, path: str):
+    LOGGER.info("Inbound message for %s", path)
+    LOGGER.info("Inbound args: %s", request.args)
+    LOGGER.info("Inbound body: %s", request.body)
+    LOGGER.info("Inbound headers: %s", request.headers)
+
+    queue = asyncio.Queue()
+
+    post_connections['abc'] = queue
+
+    try:
+        result = await asyncio.wait_for(queue.get(), timeout=60.0)
+        LOGGER.info(result)
+    except:
+        # Provide default response
+        LOGGER.info("Timeout...")
+        pass
+
+    del post_connections['abc']
+
+    return text("OK")
 
 
 @api.post("/socket/<connectionid>/send")
