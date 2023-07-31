@@ -3,7 +3,9 @@
 from contextvars import ContextVar
 import logging
 import time
+import uuid
 
+import aiohttp
 import asyncio
 
 from sanic import Blueprint, Request, Websocket, json, text
@@ -45,32 +47,47 @@ async def status_handler(request: Request):
 
 @api.post("/post/<connectionid>/send")
 async def post_send(request: Request, connectionid: str):
-    await post_connections['abc'].put('bob')
+    LOGGER.info("Post connections: %s", post_connections.keys())
+
+    await post_connections[connectionid].put(request.body.decode())
 
     return text("OK")
 
 @api.post("/post/<path:path>")
 async def post(request: Request, path: str):
+    id = str(uuid.uuid4())
+    backend = backend_var.get()
+
     LOGGER.info("Inbound message for %s", path)
+    LOGGER.info("Inbound message id %s", id)
     LOGGER.info("Inbound args: %s", request.args)
-    LOGGER.info("Inbound body: %s", request.body)
     LOGGER.info("Inbound headers: %s", request.headers)
 
+    # We use a queue to pass messages between us and incoming requests
     queue = asyncio.Queue()
+    post_connections[id] = queue
 
-    post_connections['abc'] = queue
+    LOGGER.info("Post connections: %s", post_connections.keys())
+
+    forward_result = await backend.forward_request(request)
 
     try:
-        result = await asyncio.wait_for(queue.get(), timeout=60.0)
-        LOGGER.info(result)
+        result_updated = await asyncio.wait_for(queue.get(), timeout=60.0)
+        LOGGER.info(result_updated)
+        forward_result['body'] = result_updated
     except:
         # Provide default response
         LOGGER.info("Timeout...")
         pass
 
-    del post_connections['abc']
+    del post_connections[id]
 
-    return text("OK")
+    # Set content_type
+    content_type = 'text/html; charset=utf-8'
+    if 'content-type' in forward_result['headers']:
+        content_type = forward_result['headers']['content-type']
+
+    return text(forward_result['body'], headers=forward_result['headers'], status=forward_result['status'], content_type=content_type)
 
 
 @api.post("/socket/<connectionid>/send")

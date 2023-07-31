@@ -20,6 +20,8 @@ def config() -> argparse.Namespace:
     parser.add_argument("--message-uri")
     parser.add_argument("--disconnect-uri")
     parser.add_argument("--connect-uri")
+    parser.add_argument("--forward-uri")
+
     parser.add_argument(
         "--log-level",
         default="INFO",
@@ -40,7 +42,7 @@ def main():
     elif args.backend == "http":
         from .httpbackend import HTTPBackend
 
-        backend = HTTPBackend(args.connect_uri, args.message_uri, args.disconnect_uri)
+        backend = HTTPBackend(args.forward_uri, args.connect_uri, args.message_uri, args.disconnect_uri)
     else:
         raise ValueError("Invalid backend type")
 

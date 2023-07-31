@@ -2,9 +2,9 @@
 
 from typing import Union
 import aiohttp
+from sanic import Request
 
 from .backend import Backend
-
 
 class TestBackend(Backend):
     """Test backend for SocketDock."""
@@ -31,3 +31,11 @@ class TestBackend(Backend):
     async def socket_disconnected(self, bundle: dict):
         # This test method doesn't care, but can be useful to clean up state.
         pass
+
+    async def forward_request(self, forward: Request):      
+        # return mock response
+            return {
+                "headers": {'test': 'header'},
+                "body": "body",
+                "status": 200,
+            }

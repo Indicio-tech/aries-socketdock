@@ -4,6 +4,7 @@ import logging
 from typing import Union
 
 import aiohttp
+from sanic import Request
 
 from .backend import Backend
 
@@ -14,8 +15,9 @@ LOGGER = logging.getLogger(__name__)
 class HTTPBackend(Backend):
     """HTTP backend for SocketDock."""
 
-    def __init__(self, connect_uri: str, message_uri: str, disconnect_uri: str):
+    def __init__(self, forward_uri: str, connect_uri: str, message_uri: str, disconnect_uri: str):
         """Initialize HTTP backend."""
+        self._forward_uri = forward_uri
         self._connect_uri = connect_uri
         self._message_uri = message_uri
         self._disconnect_uri = disconnect_uri
@@ -71,3 +73,20 @@ class HTTPBackend(Backend):
                     LOGGER.error("Error posting to disconnect uri: %s", response)
                 else:
                     LOGGER.debug("Response: %s", response)
+
+    async def forward_request(self, forward: Request):
+        """Handle forwarding HTTP request."""
+        
+        async with aiohttp.ClientSession() as session:
+            LOGGER.info("Forwarding request: %s %s", self.self._forward_uri, forward)
+            async with session.request(self._forward_uri, json=bundle) as resp:
+                response = await resp
+                if resp.status != 200:
+                    LOGGER.error("Error forwarding request: %s", response)
+                else:
+                    LOGGER.debug("Response: %s", response)
+                return {
+                    "headers": resp.headers,
+                    "body": resp.content,
+                    "status": resp.status,
+                }
