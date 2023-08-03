@@ -74,19 +74,42 @@ class HTTPBackend(Backend):
                 else:
                     LOGGER.debug("Response: %s", response)
 
-    async def forward_request(self, forward: Request):
+    async def forward_request(self, method: str, forward: Request, forward_url:str, callback_uris: dict):
         """Handle forwarding HTTP request."""
         
+        url = '%s%s' % (self._forward_uri, forward_url)
+        headers = {**dict(forward.headers), **callback_uris}
+        headers = {k.lower(): v for k, v in headers.items()}
+
+        if 'content-encoding' in headers:
+            del headers['content-encoding']
+
         async with aiohttp.ClientSession() as session:
-            LOGGER.info("Forwarding request: %s %s", self.self._forward_uri, forward)
-            async with session.request(self._forward_uri, json=bundle) as resp:
-                response = await resp
+            LOGGER.info("Forwarding request: %s %s", url, forward)
+            async with session.request(
+                    method, 
+                    url, 
+                    headers=headers, 
+                    params=forward.query_args, 
+                    data=forward.body) as resp:
                 if resp.status != 200:
+                    response = await resp.text()
                     LOGGER.error("Error forwarding request: %s", response)
-                else:
-                    LOGGER.debug("Response: %s", response)
+
+                headers = dict(resp.headers)
+                headers = {k.lower(): v for k, v in headers.items()}
+
+                if 'content-encoding' in headers:
+                    del headers['content-encoding']
+                if 'content-length' in headers:
+                    del headers['content-length']
+                if 'connection' in headers:
+                    del headers['connection']
+                if 'transfer-encoding' in headers:
+                    del headers['transfer-encoding']
+
                 return {
-                    "headers": resp.headers,
-                    "body": resp.content,
+                    "headers": headers,
+                    "body": await resp.content.read(),
                     "status": resp.status,
                 }

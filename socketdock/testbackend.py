@@ -32,7 +32,7 @@ class TestBackend(Backend):
         # This test method doesn't care, but can be useful to clean up state.
         pass
 
-    async def forward_request(self, forward: Request):      
+    async def forward_request(self, method: str, forward: Request, forward_url:str, callback_uris: dict):      
         # return mock response
             return {
                 "headers": {'test': 'header'},

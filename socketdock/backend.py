@@ -27,6 +27,6 @@ class Backend(ABC):
         raise NotImplementedError()
 
     @abstractmethod
-    async def forward_request(self, forward: Request):
+    async def forward_request(self, method: str, forward: Request, forward_url:str, callback_uris: dict):
         """Handle forwarding HTTP request."""
         raise NotImplementedError()

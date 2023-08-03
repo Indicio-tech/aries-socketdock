@@ -3,6 +3,9 @@ version: '3'
 services:
   websocket-gateway:
     build: .
+    environment:
+      SANIC_REQUEST_TIMEOUT: 700
+      SANIC_RESPONSE_TIMEOUT: 700 
     ports:
       - "8765:8765"
     volumes:

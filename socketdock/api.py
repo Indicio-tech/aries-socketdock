@@ -49,45 +49,66 @@ async def status_handler(request: Request):
 async def post_send(request: Request, connectionid: str):
     LOGGER.info("Post connections: %s", post_connections.keys())
 
-    await post_connections[connectionid].put(request.body.decode())
+    await post_connections[connectionid].put(request.body)
 
     return text("OK")
 
 @api.post("/post/<path:path>")
 async def post(request: Request, path: str):
-    id = str(uuid.uuid4())
+    post_id = str(uuid.uuid4())
     backend = backend_var.get()
 
     LOGGER.info("Inbound message for %s", path)
-    LOGGER.info("Inbound message id %s", id)
+    LOGGER.info("Inbound message id %s", post_id)
     LOGGER.info("Inbound args: %s", request.args)
     LOGGER.info("Inbound headers: %s", request.headers)
 
+    timeout = 60
+    if 'timeout' in request.args:
+        timeout = int(request.args['timeout'][0])
+
+    if timeout < 0:
+        timeout = 0
+    if timeout > 600:
+        timeout = 600
+
+    LOGGER.info("Timeout: %s", timeout)
+
     # We use a queue to pass messages between us and incoming requests
     queue = asyncio.Queue()
-    post_connections[id] = queue
+    post_connections[post_id] = queue
 
     LOGGER.info("Post connections: %s", post_connections.keys())
 
-    forward_result = await backend.forward_request(request)
+    callback_uris = {
+        "postdock-send": f"{endpoint_var.get()}/post/{post_id}/send",
+    }
 
-    try:
-        result_updated = await asyncio.wait_for(queue.get(), timeout=60.0)
-        LOGGER.info(result_updated)
-        forward_result['body'] = result_updated
-    except:
-        # Provide default response
-        LOGGER.info("Timeout...")
-        pass
+    forward_url = request.path.replace('/post','',1)
 
-    del post_connections[id]
+    forward_result = await backend.forward_request('POST', request, forward_url, callback_uris)
+
+    # only wait if we get a 200 status
+    if forward_result['status'] == 200:
+        try:
+            result_updated = await asyncio.wait_for(queue.get(), timeout=timeout)
+            LOGGER.info(result_updated)
+            forward_result['body'] = result_updated
+        except:
+            # Provide default response
+            LOGGER.info("No update to post, timeout reached, returning default values...")
+            pass
+
+    del post_connections[post_id]
 
     # Set content_type
     content_type = 'text/html; charset=utf-8'
     if 'content-type' in forward_result['headers']:
         content_type = forward_result['headers']['content-type']
 
-    return text(forward_result['body'], headers=forward_result['headers'], status=forward_result['status'], content_type=content_type)
+    response = await request.respond(headers=forward_result['headers'], status=forward_result['status'], content_type=content_type)
+    await response.send(forward_result['body'])
+    await response.eof()
 
 
 @api.post("/socket/<connectionid>/send")
