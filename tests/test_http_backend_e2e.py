@@ -14,26 +14,6 @@ pytestmark = pytest.mark.asyncio
 MAX_MESSAGE_BYTES = 2**22  # server-side WEBSOCKET_MAX_SIZE
 TEXT = {"content-type": "text/plain"}
 
-# Known bug (still present on sanic 25.12; fixed in a later PR in this stack):
-# when a connection closes, sanic can cancel the handler task, so the
-# `await backend.socket_disconnected(...)` in api.socket_handler's `finally`
-# raises CancelledError before the HTTP request is sent and the backend
-# is never told the client left. Whether it is lost depends on timing for every
-# close path (clean client close, backend-initiated disconnect, abrupt drop): it
-# is usually lost, but under CPU contention the notification can get through.
-# Tests that assert the notification is delivered are marked below; remove the
-# markers when fixed. The marker is deliberately non-strict, because an
-# unexpected pass is a timing outcome here, not a sign the bug is fixed.
-disconnect_lost_on_clean_close = pytest.mark.xfail(
-    strict=False,
-    reason="disconnect notification can be cancelled on a clean client close (still present on sanic 25.12; fixed in a later PR in this stack)",
-)
-disconnect_lost_sometimes = pytest.mark.xfail(
-    strict=False,
-    reason="disconnect notification can be cancelled depending on timing (still present on sanic 25.12; fixed in a later PR in this stack)",
-)
-
-
 @pytest.fixture
 def connect(http_server, mock_backend, ws_connect):
     """Open a websocket and return (ws, connection_id) from the connect callback."""
@@ -208,19 +188,17 @@ async def test_send_without_content_type_is_delivered_as_binary(
 # --- disconnect handling -----------------------------------------------------
 
 
-@disconnect_lost_on_clean_close
 async def test_client_close_notifies_backend(mock_backend, connect):
     ws, conn_id = await connect()
     await ws.close()
-    (disc,) = await mock_backend.wait_for("disconnect", timeout=2)
+    (disc,) = await mock_backend.wait_for("disconnect")
     assert disc == {"connection_id": conn_id}
 
 
-@disconnect_lost_on_clean_close
 async def test_connection_is_unregistered_after_close(http_server, mock_backend, connect):
     ws, conn_id = await connect()
     await ws.close()
-    await mock_backend.wait_for("disconnect", timeout=2)
+    await mock_backend.wait_for("disconnect")
 
     resp = await http_server.post(f"/socket/{conn_id}/send", data="late", headers=TEXT)
     assert resp.status >= 400
@@ -248,7 +226,6 @@ async def test_backend_can_disconnect_a_client(http_server, connect):
         await ws.recv()
 
 
-@disconnect_lost_sometimes
 async def test_backend_initiated_disconnect_notifies_backend(
     http_server, mock_backend, connect
 ):
@@ -257,17 +234,16 @@ async def test_backend_initiated_disconnect_notifies_backend(
     with pytest.raises(WSClosed):
         await ws.recv()
 
-    (disc,) = await mock_backend.wait_for("disconnect", timeout=2)
+    (disc,) = await mock_backend.wait_for("disconnect")
     assert disc["connection_id"] == conn_id
 
 
-@disconnect_lost_sometimes
 async def test_abrupt_client_drop_still_notifies_backend(
     http_server, mock_backend, connect
 ):
     ws, conn_id = await connect()
     await ws.abort()
-    (disc,) = await mock_backend.wait_for("disconnect", timeout=2)
+    (disc,) = await mock_backend.wait_for("disconnect")
     assert disc["connection_id"] == conn_id
     assert http_server.is_running()
 
@@ -347,3 +323,30 @@ async def test_without_connect_uri_no_connect_notification_is_sent(
     await ws.close()
 
     await mock_backend.assert_none_for("connect")
+
+
+async def test_failed_disconnect_notification_is_logged_and_server_stays_healthy(
+    start_server, mock_backend, ws_connect
+):
+    """If the disconnect POST itself fails, log it; do not leak a task exception."""
+    server = await start_server(
+        "http",
+        "--message-uri",
+        mock_backend.uri("message"),
+        "--disconnect-uri",
+        "http://127.0.0.1:9/disconnect",  # nothing listens here
+    )
+    ws = await ws_connect(server.ws_url)
+    await ws.close()
+
+    for _ in range(50):
+        if "Failed to notify backend of disconnect" in server.logs():
+            break
+        await asyncio.sleep(0.1)
+    logs = server.logs()
+    assert "Failed to notify backend of disconnect" in logs
+    assert "never retrieved" not in logs
+    assert server.is_running()
+    ws2 = await ws_connect(server.ws_url)
+    await ws2.send("still fine")
+    await mock_backend.wait_for("message")
