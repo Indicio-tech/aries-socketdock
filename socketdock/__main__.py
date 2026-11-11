@@ -29,7 +29,7 @@ def config() -> argparse.Namespace:
         prog="SocketDock", description="Socket Gateway for configurable backends"
     )
     parser.add_argument("--bindip", default="127.0.0.1")
-    parser.add_argument("--bindport", default=8765)
+    parser.add_argument("--bindport", type=int, default=8765)
     parser.add_argument("--endpoint", default="http://127.0.0.1:8765")
     parser.add_argument("--backend", default="loopback", choices=["loopback", "http"])
     parser.add_argument("--message-uri")
