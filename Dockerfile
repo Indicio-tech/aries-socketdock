@@ -1,19 +1,17 @@
-FROM python:3.9-slim-bookworm as base
+# Base image pinned by digest (python 3.12, Debian bookworm). Update the digest
+# deliberately, e.g. via Dependabot's docker ecosystem.
+FROM python:3.12-slim-bookworm@sha256:935c3c5b12357a7e10caa9c1e6ca5692344d97cf229832ef584be2cec9fc03df AS base
 WORKDIR /usr/src/app
 
-RUN apt-get update && apt-get install -y curl && apt-get clean
-ENV POETRY_VERSION=1.5.1
-ENV POETRY_HOME=/opt/poetry
-RUN curl -sSL https://install.python-poetry.org | python -
-
-ENV PATH="/opt/poetry/bin:$PATH"
+ENV POETRY_VERSION=2.5.1
+RUN pip install --no-cache-dir "poetry==$POETRY_VERSION"
 RUN poetry config virtualenvs.in-project true
 
-# Setup project
+# Setup project (production dependencies only)
 COPY pyproject.toml poetry.lock ./
-RUN poetry install --without dev
+RUN poetry install --only main --no-root
 
-FROM python:3.9-slim-bookworm
+FROM python:3.12-slim-bookworm@sha256:935c3c5b12357a7e10caa9c1e6ca5692344d97cf229832ef584be2cec9fc03df
 WORKDIR /usr/src/app
 COPY --from=base /usr/src/app/.venv /usr/src/app/.venv
 ENV PATH="/usr/src/app/.venv/bin:$PATH"
