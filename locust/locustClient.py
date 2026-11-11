@@ -1,15 +1,17 @@
 from locust import events
 from flask import Flask
 
-import time
 import inspect
-
-
-import websocket
+import os
+import time
 
 import gevent
+from gevent.lock import RLock
+from gevent.pywsgi import WSGIServer
+import websocket
 
-gevent.monkey.patch_all()
+# URL SocketDock is reachable at from the locust container.
+SOCKETDOCK_WS_URL = os.getenv("SOCKETDOCK_WS_URL", "ws://websocket-gateway:8765/ws")
 
 
 def stopwatch(func):
@@ -17,28 +19,22 @@ def stopwatch(func):
         # get task's function name
         previous_frame = inspect.currentframe().f_back
         file_name, _, task_name, _, _ = inspect.getframeinfo(previous_frame)
+        name = file_name + "_" + task_name
 
         start = time.time()
         result = None
+        exception = None
         try:
             result = func(*args, **kwargs)
         except Exception as e:
-            total = int((time.time() - start) * 1000)
-            events.request_failure.fire(
-                request_type="TYPE",
-                name=file_name + "_" + task_name,
-                response_time=total,
-                exception=e,
-                response_length=0,
-            )
-        else:
-            total = int((time.time() - start) * 1000)
-            events.request_success.fire(
-                request_type="TYPE",
-                name=file_name + "_" + task_name,
-                response_time=total,
-                response_length=0,
-            )
+            exception = e
+        events.request.fire(
+            request_type="WS",
+            name=name,
+            response_time=int((time.time() - start) * 1000),
+            response_length=0,
+            exception=exception,
+        )
         return result
 
     return wrapper
@@ -46,10 +42,14 @@ def stopwatch(func):
 
 class Singleton(type):
     _instances = {}
+    # Many simulated users start at once and server startup yields to other
+    # greenlets, so creation must be serialized or the port gets bound twice.
+    _lock = RLock()
 
     def __call__(cls, *args, **kwargs):
-        if cls not in cls._instances:
-            cls._instances[cls] = super(Singleton, cls).__call__(*args, **kwargs)
+        with cls._lock:
+            if cls not in cls._instances:
+                cls._instances[cls] = super(Singleton, cls).__call__(*args, **kwargs)
         return cls._instances[cls]
 
 
@@ -75,7 +75,7 @@ class InboundHTTP(metaclass=Singleton):
         def message():
             return "<p>Hello, World!</p>"
 
-        gevent.spawn(app.run, host="0.0.0.0", port=4242)
+        WSGIServer(("0.0.0.0", 4242), app, log=None).start()
 
     def track(self):
         print(f"TODO track event at {self.api_url}")
@@ -98,19 +98,19 @@ class CustomClient:
         self.connected = False
 
         def on_message(wsapp, message):
-            print(message)
+            pass  # printing every reply would distort load results
 
         def on_open(wsapp):
             self.connected = True
 
-        def on_close(wsapp):
+        def on_close(wsapp, close_status_code=None, close_msg=None):
             self.connected = False
 
         # Debugging stuff
         # websocket.enableTrace(True)
 
         self.ws = websocket.WebSocketApp(
-            "ws://websocket-gateway:8765/ws",
+            SOCKETDOCK_WS_URL,
             on_message=on_message,
             on_open=on_open,
             on_close=on_close,
