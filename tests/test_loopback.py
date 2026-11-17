@@ -37,14 +37,6 @@ async def test_loopback_serves_concurrent_clients(loopback_server, ws_connect):
     assert replies == ["Hello yourself"] * 5
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "Known bug: api.socket_send compares Content-Type to exactly 'text/plain', "
-        "so 'text/plain; charset=utf-8' (what aiohttp sends for str bodies) is "
-        "delivered as a binary frame. Remove this xfail when fixed."
-    ),
-)
 async def test_loopback_reply_is_a_text_frame(loopback_server, ws_connect):
     ws = await ws_connect(loopback_server.ws_url)
     await ws.send("hello")

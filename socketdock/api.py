@@ -75,6 +75,23 @@ async def status_handler(request: Request):
     )
 
 
+def _text_encoding(content_type: str):
+    """Return the charset for a text/plain Content-Type, or None for other types.
+
+    The media type is compared case-insensitively and parameters such as
+    ``; charset=utf-8`` are honored (defaulting to UTF-8), rather than requiring
+    the header to be exactly ``text/plain``.
+    """
+    media_type, *params = (part.strip() for part in content_type.split(";"))
+    if media_type.lower() != "text/plain":
+        return None
+    for param in params:
+        key, _, value = param.partition("=")
+        if key.strip().lower() == "charset" and value.strip():
+            return value.strip().strip("\"'")
+    return "utf-8"
+
+
 @api.post("/socket/<connectionid>/send")
 async def socket_send(request: Request, connectionid: str):
     """Send a message to a connected socket."""
@@ -85,8 +102,13 @@ async def socket_send(request: Request, connectionid: str):
         return text("FAIL", status=500)
 
     socket = active_connections[connectionid]
-    if request.headers["content-type"] == "text/plain":
-        await socket.send(request.body.decode())
+    encoding = _text_encoding(request.headers.get("content-type", ""))
+    if encoding:
+        try:
+            message = request.body.decode(encoding)
+        except (UnicodeDecodeError, LookupError):
+            return text("FAIL: body is not valid text for its charset", status=400)
+        await socket.send(message)
     else:
         await socket.send(request.body)
     return text("OK")

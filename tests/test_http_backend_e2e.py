@@ -164,6 +164,57 @@ async def test_messages_are_attributed_to_the_right_connection(mock_backend, con
     assert by_conn == {id_a: "from a", id_b: "from b"}
 
 
+@pytest.mark.parametrize(
+    "content_type",
+    [
+        "text/plain",
+        "text/plain; charset=utf-8",
+        "text/plain;charset=UTF-8",
+        'text/plain; charset="utf-8"',
+        "TEXT/PLAIN",
+    ],
+)
+async def test_text_plain_variants_are_delivered_as_text(
+    http_server, connect, content_type
+):
+    ws, conn_id = await connect()
+    await http_server.post(
+        f"/socket/{conn_id}/send",
+        data="héllo".encode("utf-8"),
+        headers={"content-type": content_type},
+    )
+    assert await ws.recv() == "héllo"
+
+
+async def test_text_plain_honors_a_non_utf8_charset(http_server, connect):
+    ws, conn_id = await connect()
+    await http_server.post(
+        f"/socket/{conn_id}/send",
+        data="café".encode("latin-1"),
+        headers={"content-type": "text/plain; charset=iso-8859-1"},
+    )
+    assert await ws.recv() == "café"
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        {"content-type": "text/plain"},  # bytes are not valid UTF-8
+        {"content-type": "text/plain; charset=not-a-real-charset"},
+    ],
+)
+async def test_undecodable_text_is_rejected_without_dropping_the_socket(
+    http_server, mock_backend, connect, headers
+):
+    ws, conn_id = await connect()
+    resp = await http_server.post(
+        f"/socket/{conn_id}/send", data=b"\xff\xfe\xfd", headers=headers
+    )
+    assert resp.status == 400
+    await ws.send("still connected")
+    await mock_backend.wait_for("message")
+
+
 async def test_send_with_other_content_type_is_delivered_as_binary(http_server, connect):
     ws, conn_id = await connect()
     await http_server.post(
