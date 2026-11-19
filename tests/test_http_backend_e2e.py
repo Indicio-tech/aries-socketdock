@@ -178,12 +178,14 @@ async def test_text_plain_variants_are_delivered_as_text(
     http_server, connect, content_type
 ):
     ws, conn_id = await connect()
-    await http_server.post(
+    resp = await http_server.post(
         f"/socket/{conn_id}/send",
         data="héllo".encode("utf-8"),
         headers={"content-type": content_type},
     )
-    assert await ws.recv() == "héllo"
+    assert resp.status == 200
+    frame = await ws.recv()
+    assert isinstance(frame, str) and frame == "héllo"
 
 
 async def test_text_plain_honors_a_non_utf8_charset(http_server, connect):
@@ -197,22 +199,89 @@ async def test_text_plain_honors_a_non_utf8_charset(http_server, connect):
 
 
 @pytest.mark.parametrize(
-    "headers",
+    "headers,status",
     [
-        {"content-type": "text/plain"},  # bytes are not valid UTF-8
-        {"content-type": "text/plain; charset=not-a-real-charset"},
+        ({"content-type": "text/plain"}, 400),  # bytes are not valid UTF-8
+        ({"content-type": "text/plain; charset=not-a-real-charset"}, 415),
+        ({"content-type": "text/plain; charset=undefined"}, 415),
+        ({"content-type": "text/plain; charset=rot13"}, 415),
+        ({"content-type": "text/plain; charset=unicode_escape"}, 415),
+        ({"content-type": "text/plain; charset=utf-7"}, 415),
+        ({"content-type": "text/plain; charset=idna"}, 415),
     ],
 )
-async def test_undecodable_text_is_rejected_without_dropping_the_socket(
-    http_server, mock_backend, connect, headers
+async def test_rejected_text_does_not_drop_the_socket_or_send_a_frame(
+    http_server, mock_backend, connect, headers, status
 ):
     ws, conn_id = await connect()
     resp = await http_server.post(
         f"/socket/{conn_id}/send", data=b"\xff\xfe\xfd", headers=headers
     )
-    assert resp.status == 400
+    assert resp.status == status
+    assert resp.body.startswith("FAIL")
+    with pytest.raises(asyncio.TimeoutError):
+        await ws.recv(timeout=0.3)  # nothing was sent to the client
+    # The connection still works in both directions.
     await ws.send("still connected")
     await mock_backend.wait_for("message")
+    ok = await http_server.post(f"/socket/{conn_id}/send", data="after", headers=TEXT)
+    assert ok.status == 200
+    assert await ws.recv() == "after"
+
+
+async def test_punycode_charset_is_rejected_quickly(http_server, connect):
+    """punycode decoding is superlinear; it must be refused, not attempted."""
+    import time
+
+    ws, conn_id = await connect()
+    start = time.monotonic()
+    resp = await http_server.post(
+        f"/socket/{conn_id}/send",
+        data=b"a" * 200_000,
+        headers={"content-type": "text/plain; charset=punycode"},
+    )
+    assert resp.status == 415
+    assert time.monotonic() - start < 1.0
+
+
+@pytest.mark.parametrize(
+    "content_type",
+    [
+        "text/plainx",
+        "text/plain-foo",
+        "text/html",
+        "text/*",
+        "application/json; charset=utf-8",
+    ],
+)
+async def test_non_text_plain_types_stay_binary(http_server, connect, content_type):
+    ws, conn_id = await connect()
+    resp = await http_server.post(
+        f"/socket/{conn_id}/send", data=b"abc", headers={"content-type": content_type}
+    )
+    assert resp.status == 200
+    assert await ws.recv() == b"abc"
+
+
+@pytest.mark.parametrize(
+    "content_type",
+    [
+        "text/plain; format=flowed; charset=utf-8",
+        "text/plain; CHARSET=utf-8",
+        'text/plain; charset=""',
+        "text/plain; charset=",
+    ],
+)
+async def test_charset_parameter_variants_are_text(http_server, connect, content_type):
+    ws, conn_id = await connect()
+    resp = await http_server.post(
+        f"/socket/{conn_id}/send",
+        data="héllo".encode("utf-8"),
+        headers={"content-type": content_type},
+    )
+    assert resp.status == 200
+    frame = await ws.recv()
+    assert isinstance(frame, str) and frame == "héllo"
 
 
 async def test_send_with_other_content_type_is_delivered_as_binary(http_server, connect):
