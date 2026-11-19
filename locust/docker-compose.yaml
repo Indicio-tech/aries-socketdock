@@ -1,16 +1,24 @@
 services:
   locust-socketdock:
     build: .
+    depends_on:
+      - websocket-gateway
+    # Loopback only: the Locust UI is unauthenticated and the mock backend on
+    # 4242 accepts anything. SocketDock reaches 4242 over the compose network.
     ports:
-      - "8089:8089"
-      - "4242:4242"
+      - "127.0.0.1:8089:8089"
+    environment:
+      - SOCKETDOCK_WS_URL=${SOCKETDOCK_WS_URL:-ws://websocket-gateway:8765/ws}
+      - LOCUST_MIN_WAIT=${LOCUST_MIN_WAIT:-0.1}
+      - LOCUST_MAX_WAIT=${LOCUST_MAX_WAIT:-1}
+      - LOCUST_CONNECT_TIMEOUT=${LOCUST_CONNECT_TIMEOUT:-10}
+      - LOCUST_REPLY_GRACE=${LOCUST_REPLY_GRACE:-2}
+      - LOCUST_CLOSE_GRACE=${LOCUST_CLOSE_GRACE:-1}
     volumes:
       - ./:/usr/src/app/locust:z
 
   websocket-gateway:
     build: ../
-    ports:
-      - "8765:8765"
     volumes:
       - ../socketdock:/usr/src/app/socketdock:z
     command: >
