@@ -17,14 +17,15 @@ TEXT = {"content-type": "text/plain"}
 # Known bug (sanic 22.12): when a connection closes, sanic can cancel the handler
 # task, so the `await backend.socket_disconnected(...)` in api.socket_handler's
 # `finally` raises CancelledError before the HTTP request is sent and the backend
-# is never told the client left. A clean client close always loses it; a
-# backend-initiated disconnect or an abrupt drop loses it depending on timing.
+# is never told the client left. Whether it is lost depends on timing for every
+# close path (clean client close, backend-initiated disconnect, abrupt drop): it
+# is usually lost, but under CPU contention the notification can get through.
 # Tests that assert the notification is delivered are marked below; remove the
-# markers when fixed. A clean client close fails deterministically (strict, so an
-# unexpected pass is reported); the other two paths depend on timing (non-strict).
+# markers when fixed. The marker is deliberately non-strict, because an
+# unexpected pass is a timing outcome here, not a sign the bug is fixed.
 disconnect_lost_on_clean_close = pytest.mark.xfail(
-    strict=True,
-    reason="disconnect notification is cancelled on a clean client close (sanic 22.12)",
+    strict=False,
+    reason="disconnect notification can be cancelled on a clean client close (sanic 22.12)",
 )
 disconnect_lost_sometimes = pytest.mark.xfail(
     strict=False,
