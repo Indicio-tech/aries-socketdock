@@ -2,6 +2,7 @@
 
 import logging
 from typing import Dict, Union
+from urllib.parse import urlsplit
 
 import aiohttp
 
@@ -9,6 +10,15 @@ from .backend import Backend
 
 
 LOGGER = logging.getLogger(__name__)
+
+
+def _redact_uri(uri: str) -> str:
+    """Return ``uri`` without credentials or query string, safe to log."""
+    parts = urlsplit(uri)
+    host = parts.hostname or ""
+    if parts.port:
+        host = f"{host}:{parts.port}"
+    return f"{parts.scheme}://{host}{parts.path}"
 
 
 class HTTPBackend(Backend):
@@ -58,7 +68,9 @@ class HTTPBackend(Backend):
 
         if self._connect_uri:
             async with aiohttp.ClientSession() as session:
-                LOGGER.info("Posting message %s to %s", http_body, self._connect_uri)
+                LOGGER.info(
+                    "Posting message %s to %s", http_body, _redact_uri(self._connect_uri)
+                )
                 async with session.post(self._connect_uri, json=http_body) as resp:
                     response = await resp.text()
                     if resp.status != 200:
@@ -81,7 +93,9 @@ class HTTPBackend(Backend):
         }
 
         async with aiohttp.ClientSession() as session:
-            LOGGER.info("Posting message %s to %s", http_body, self._message_uri)
+            LOGGER.info(
+                "Posting message %s to %s", http_body, _redact_uri(self._message_uri)
+            )
             async with session.post(self._message_uri, json=http_body) as resp:
                 response = await resp.text()
                 if resp.status != 200:
@@ -93,7 +107,9 @@ class HTTPBackend(Backend):
         """Handle socket disconnected."""
         async with aiohttp.ClientSession() as session:
             LOGGER.info(
-                "Notifying of disconnect: %s %s", self._disconnect_uri, connection_id
+                "Notifying of disconnect: %s %s",
+                _redact_uri(self._disconnect_uri),
+                connection_id,
             )
             async with session.post(
                 self._disconnect_uri, json={"connection_id": connection_id}

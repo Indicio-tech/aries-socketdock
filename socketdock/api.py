@@ -20,15 +20,22 @@ LAUNCH_TIME = time.time_ns()
 active_connections = {}
 lifetime_connections = 0
 
+# Upper bound, in seconds, for one disconnect notification. Without it a hanging
+# backend would keep a task (and its HTTP session) alive until aiohttp's own
+# 300 s default expires, for every connection that closes meanwhile.
+DISCONNECT_NOTIFY_TIMEOUT = 10.0
+
 # Strong references to in-flight disconnect notifications; asyncio only keeps
 # weak references to tasks, so an unreferenced task could be collected mid-flight.
-_disconnect_tasks: set = set()
+# Deliberately module-level and not drained: see _notify_disconnect_shielded.
+_disconnect_tasks: set[asyncio.Task[None]] = set()
 
 
 async def _notify_disconnect(backend: Backend, socket_id: str):
     """Tell the backend a socket is gone, logging (not raising) any failure."""
     try:
-        await backend.socket_disconnected(socket_id)
+        async with asyncio.timeout(DISCONNECT_NOTIFY_TIMEOUT):
+            await backend.socket_disconnected(socket_id)
     except Exception:
         LOGGER.exception("Failed to notify backend of disconnect: %s", socket_id)
 
@@ -42,7 +49,7 @@ async def _notify_disconnect_shielded(backend: Backend, socket_id: str):
     Running it as its own task, shielded from the handler's cancellation, lets
     it finish regardless.
     """
-    task = asyncio.ensure_future(_notify_disconnect(backend, socket_id))
+    task = asyncio.create_task(_notify_disconnect(backend, socket_id))
     _disconnect_tasks.add(task)
     task.add_done_callback(_disconnect_tasks.discard)
     await asyncio.shield(task)
@@ -132,6 +139,6 @@ async def socket_handler(request: Request, websocket: Websocket):
     finally:
         # unregister user
         if socket_id:
-            del active_connections[socket_id]
+            active_connections.pop(socket_id, None)
             LOGGER.info("Removed connection: %s", socket_id)
             await _notify_disconnect_shielded(backend, socket_id)

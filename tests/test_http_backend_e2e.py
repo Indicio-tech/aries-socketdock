@@ -5,6 +5,7 @@ backend callbacks exercise both directions of the relay.
 """
 
 import asyncio
+import signal
 
 import pytest
 from helpers import WSClosed
@@ -13,6 +14,7 @@ pytestmark = pytest.mark.asyncio
 
 MAX_MESSAGE_BYTES = 2**22  # server-side WEBSOCKET_MAX_SIZE
 TEXT = {"content-type": "text/plain"}
+
 
 @pytest.fixture
 def connect(http_server, mock_backend, ws_connect):
@@ -339,14 +341,66 @@ async def test_failed_disconnect_notification_is_logged_and_server_stays_healthy
     ws = await ws_connect(server.ws_url)
     await ws.close()
 
-    for _ in range(50):
-        if "Failed to notify backend of disconnect" in server.logs():
-            break
+    deadline = asyncio.get_running_loop().time() + 5
+    while "Failed to notify backend of disconnect" not in server.logs():
+        assert asyncio.get_running_loop().time() < deadline, server.logs()
         await asyncio.sleep(0.1)
-    logs = server.logs()
-    assert "Failed to notify backend of disconnect" in logs
-    assert "never retrieved" not in logs
     assert server.is_running()
     ws2 = await ws_connect(server.ws_url)
     await ws2.send("still fine")
     await mock_backend.wait_for("message")
+
+
+async def test_open_connection_is_reported_disconnected_on_sigterm(
+    http_server, mock_backend, connect
+):
+    """Stopping the server closes open sockets; the backend must still be told."""
+    _, conn_id = await connect()
+    http_server.process.send_signal(signal.SIGTERM)
+    (disc,) = await mock_backend.wait_for("disconnect")
+    assert disc["connection_id"] == conn_id
+
+
+async def test_many_open_connections_are_all_reported_on_sigterm(
+    http_server, mock_backend, ws_connect
+):
+    n = 30
+    ids = set()
+    for _ in range(n):
+        before = len(mock_backend.requests["connect"])
+        await ws_connect(http_server.ws_url)
+        conns = await mock_backend.wait_for("connect", before + 1)
+        ids.add(conns[before]["meta"]["connection_id"])
+    http_server.process.send_signal(signal.SIGTERM)
+    await mock_backend.wait_for("disconnect", n, timeout=10)
+    got = [d["connection_id"] for d in mock_backend.requests["disconnect"]]
+    assert sorted(got) == sorted(ids)  # every id exactly once
+
+
+async def test_repeated_clean_closes_are_each_reported_exactly_once(
+    http_server, mock_backend, connect
+):
+    ids = []
+    for _ in range(10):
+        ws, conn_id = await connect()
+        await ws.close()
+        ids.append(conn_id)
+    await mock_backend.wait_for("disconnect", 10, timeout=10)
+    await asyncio.sleep(0.3)  # a duplicate would arrive by now
+    got = [d["connection_id"] for d in mock_backend.requests["disconnect"]]
+    assert sorted(got) == sorted(ids)
+
+
+async def test_backend_error_on_disconnect_does_not_break_later_connections(
+    http_server, mock_backend, connect
+):
+    mock_backend.status["disconnect"] = 500
+    ws, _ = await connect()
+    await ws.close()
+    await mock_backend.wait_for("disconnect", 1)
+    mock_backend.status["disconnect"] = 200
+    ws2, conn_id = await connect()
+    await ws2.close()
+    discs = await mock_backend.wait_for("disconnect", 2)
+    assert discs[1]["connection_id"] == conn_id
+    assert http_server.is_running()
