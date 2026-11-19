@@ -20,10 +20,15 @@ TEXT = {"content-type": "text/plain"}
 # is never told the client left. A clean client close always loses it; a
 # backend-initiated disconnect or an abrupt drop loses it depending on timing.
 # Tests that assert the notification is delivered are marked below; remove the
-# markers when fixed.
+# markers when fixed. A clean client close fails deterministically (strict, so an
+# unexpected pass is reported); the other two paths depend on timing (non-strict).
 disconnect_lost_on_clean_close = pytest.mark.xfail(
+    strict=True,
+    reason="disconnect notification is cancelled on a clean client close (sanic 22.12)",
+)
+disconnect_lost_sometimes = pytest.mark.xfail(
     strict=False,
-    reason="disconnect notification can be cancelled when a connection closes (sanic 22.12)",
+    reason="disconnect notification can be cancelled depending on timing (sanic 22.12)",
 )
 
 
@@ -241,7 +246,7 @@ async def test_backend_can_disconnect_a_client(http_server, connect):
         await ws.recv()
 
 
-@disconnect_lost_on_clean_close
+@disconnect_lost_sometimes
 async def test_backend_initiated_disconnect_notifies_backend(
     http_server, mock_backend, connect
 ):
@@ -254,7 +259,7 @@ async def test_backend_initiated_disconnect_notifies_backend(
     assert disc["connection_id"] == conn_id
 
 
-@disconnect_lost_on_clean_close
+@disconnect_lost_sometimes
 async def test_abrupt_client_drop_still_notifies_backend(
     http_server, mock_backend, connect
 ):
