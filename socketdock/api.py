@@ -1,6 +1,7 @@
 """API endpoints for the server."""
 
 import asyncio
+import codecs
 from contextvars import ContextVar
 import logging
 import time
@@ -75,6 +76,46 @@ async def status_handler(request: Request):
     )
 
 
+# Charsets accepted for text/plain bodies, keyed by canonical codec name. The
+# charset comes from a caller-supplied header, so it is never used as an open
+# codec lookup: some stdlib codecs are not safe for untrusted input (punycode
+# decoding is superlinear in CPU time; unicode_escape and utf-7 can produce
+# lone surrogates that cannot be sent as UTF-8).
+ALLOWED_CHARSETS = frozenset(
+    {"utf-8", "ascii", "iso8859-1", "utf-16", "utf-16-le", "utf-16-be"}
+)
+
+
+def _text_encoding(content_type: str) -> str | None:
+    """Return the requested charset for a text/plain Content-Type.
+
+    Returns None for any other media type. The media type is compared
+    case-insensitively and a ``charset`` parameter is honored (defaulting to
+    UTF-8 when absent or empty). The returned name is not validated; pass it
+    to ``_resolve_charset``.
+    """
+    media_type, *params = (part.strip() for part in content_type.split(";"))
+    if media_type.lower() != "text/plain":
+        return None
+    for param in params:
+        key, _, value = param.partition("=")
+        if key.strip().lower() != "charset":
+            continue
+        value = value.strip().strip("\"'").strip()
+        if value:
+            return value
+    return "utf-8"
+
+
+def _resolve_charset(name: str) -> str | None:
+    """Return the canonical codec name if ``name`` is an allowed charset."""
+    try:
+        canonical = codecs.lookup(name).name
+    except (LookupError, ValueError):
+        return None
+    return canonical if canonical in ALLOWED_CHARSETS else None
+
+
 @api.post("/socket/<connectionid>/send")
 async def socket_send(request: Request, connectionid: str):
     """Send a message to a connected socket."""
@@ -85,8 +126,18 @@ async def socket_send(request: Request, connectionid: str):
         return text("FAIL", status=500)
 
     socket = active_connections[connectionid]
-    if request.headers["content-type"] == "text/plain":
-        await socket.send(request.body.decode())
+    requested = _text_encoding(request.headers.get("content-type", ""))
+    if requested is not None:
+        codec = _resolve_charset(requested)
+        if codec is None:
+            LOGGER.warning("Unsupported charset in send to %s", connectionid)
+            return text("FAIL: unsupported charset", status=415)
+        try:
+            message = request.body.decode(codec)
+        except UnicodeDecodeError:
+            LOGGER.warning("Undecodable body in send to %s", connectionid)
+            return text("FAIL: body is not valid text for its charset", status=400)
+        await socket.send(message)
     else:
         await socket.send(request.body)
     return text("OK")
