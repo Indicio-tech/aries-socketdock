@@ -1,5 +1,6 @@
 """API endpoints for the server."""
 
+import asyncio
 from contextvars import ContextVar
 import logging
 import time
@@ -18,6 +19,40 @@ LAUNCH_TIME = time.time_ns()
 # TODO: track timestamp of connections when connected
 active_connections = {}
 lifetime_connections = 0
+
+# Upper bound, in seconds, for one disconnect notification. Without it a hanging
+# backend would keep a task (and its HTTP session) alive until aiohttp's own
+# 300 s default expires, for every connection that closes meanwhile.
+DISCONNECT_NOTIFY_TIMEOUT = 10.0
+
+# Strong references to in-flight disconnect notifications; asyncio only keeps
+# weak references to tasks, so an unreferenced task could be collected mid-flight.
+# Deliberately module-level and not drained: see _notify_disconnect_shielded.
+_disconnect_tasks: set[asyncio.Task[None]] = set()
+
+
+async def _notify_disconnect(backend: Backend, socket_id: str):
+    """Tell the backend a socket is gone, logging (not raising) any failure."""
+    try:
+        async with asyncio.timeout(DISCONNECT_NOTIFY_TIMEOUT):
+            await backend.socket_disconnected(socket_id)
+    except Exception:
+        LOGGER.exception("Failed to notify backend of disconnect: %s", socket_id)
+
+
+async def _notify_disconnect_shielded(backend: Backend, socket_id: str):
+    """Send the disconnect notification even if this handler is cancelled.
+
+    When a websocket closes, sanic may cancel the handler task. A plain
+    ``await`` in the handler's ``finally`` would then be cancelled before the
+    notification is sent, and the backend would never learn the client left.
+    Running it as its own task, shielded from the handler's cancellation, lets
+    it finish regardless.
+    """
+    task = asyncio.create_task(_notify_disconnect(backend, socket_id))
+    _disconnect_tasks.add(task)
+    task.add_done_callback(_disconnect_tasks.discard)
+    await asyncio.shield(task)
 
 
 # Temporarily disabled due to lack of authorization
@@ -104,6 +139,6 @@ async def socket_handler(request: Request, websocket: Websocket):
     finally:
         # unregister user
         if socket_id:
-            del active_connections[socket_id]
+            active_connections.pop(socket_id, None)
             LOGGER.info("Removed connection: %s", socket_id)
-            await backend.socket_disconnected(socket_id)
+            await _notify_disconnect_shielded(backend, socket_id)
