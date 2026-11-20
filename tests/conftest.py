@@ -148,6 +148,7 @@ async def _wait_until_listening(server: Server):
         except OSError:
             if asyncio.get_running_loop().time() > deadline:
                 server.process.kill()
+                server.process.wait()
                 raise RuntimeError(
                     f"SocketDock did not start listening:\n{server.logs()}"
                 )
@@ -192,6 +193,7 @@ async def start_server():
         process = subprocess.Popen(
             cmd, cwd=REPO_ROOT, stdout=log, stderr=subprocess.STDOUT, env=os.environ
         )
+        log.close()  # the child holds its own descriptor
         server = Server(port, process, log.name)
         servers.append(server)
         await _wait_until_listening(server)
@@ -206,6 +208,7 @@ async def start_server():
                 server.process.wait(timeout=10)
             except subprocess.TimeoutExpired:
                 server.process.kill()
+                server.process.wait()
         try:
             os.unlink(server.log_path)
         except OSError:

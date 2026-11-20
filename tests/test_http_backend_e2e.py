@@ -14,9 +14,10 @@ pytestmark = pytest.mark.asyncio
 MAX_MESSAGE_BYTES = 2**22  # server-side WEBSOCKET_MAX_SIZE
 TEXT = {"content-type": "text/plain"}
 
-# Known bug (sanic 22.12): when a connection closes, sanic can cancel the handler
-# task, so the `await backend.socket_disconnected(...)` in api.socket_handler's
-# `finally` raises CancelledError before the HTTP request is sent and the backend
+# Known bug (still present on sanic 25.12; fixed in a later PR in this stack):
+# when a connection closes, sanic can cancel the handler task, so the
+# `await backend.socket_disconnected(...)` in api.socket_handler's `finally`
+# raises CancelledError before the HTTP request is sent and the backend
 # is never told the client left. Whether it is lost depends on timing for every
 # close path (clean client close, backend-initiated disconnect, abrupt drop): it
 # is usually lost, but under CPU contention the notification can get through.
@@ -25,11 +26,11 @@ TEXT = {"content-type": "text/plain"}
 # unexpected pass is a timing outcome here, not a sign the bug is fixed.
 disconnect_lost_on_clean_close = pytest.mark.xfail(
     strict=False,
-    reason="disconnect notification can be cancelled on a clean client close (sanic 22.12)",
+    reason="disconnect notification can be cancelled on a clean client close (still present on sanic 25.12; fixed in a later PR in this stack)",
 )
 disconnect_lost_sometimes = pytest.mark.xfail(
     strict=False,
-    reason="disconnect notification can be cancelled depending on timing (sanic 22.12)",
+    reason="disconnect notification can be cancelled depending on timing (still present on sanic 25.12; fixed in a later PR in this stack)",
 )
 
 
