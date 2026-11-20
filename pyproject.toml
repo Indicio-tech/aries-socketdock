@@ -40,3 +40,8 @@ per-file-ignores = {"**/{tests}/*" = ["F841", "D", "E501"]}
 
 [tool.ruff.format]
 docstring-code-format = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
